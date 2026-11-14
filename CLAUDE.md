@@ -43,6 +43,13 @@ That leaves 17 usable features (op1, op2 + 15 sensors), measured Nov 13, 2026.
 4. Week 4: results table, README write-up, honest "what failed" section.
 5. Later: 1D-CNN/LSTM in PyTorch; then move to NASA HLS satellite data (Project 1).
 
+## Current status (updated Nov 14, 2026)
+- Weeks 1 to 4 are DONE, plus one follow-up investigation. Read README.md and LOG.md for the full story before starting anything.
+- Results on the FD001 test set (all run and logged): mean baseline 52.62, linear regression 32.04, linear clipped 21.90, gradient boosting clipped 18.36, gradient boosting clipped + "change from each engine's own start" features 15.18 (current best).
+- Key finding: engines start at different sensor levels, so comparing each engine to its own first 20 flights matters more than smoothing.
+- Layout: shared helpers in src/cmapss.py; each step is a numbered script in src/ AND an executed notebook in notebooks/; plots in figures/. Run code with .venv/bin/python.
+- NEXT: the "Later" milestone, a 1D-CNN or LSTM in PyTorch on FD001 (PyTorch is not installed yet). Ask me before choosing the design.
+
 ## Rules for this repo
 - Log every experiment in LOG.md (date, model, RMSE, what changed, what I learned).
 - Small commits with clear messages. Commit after each working step.
