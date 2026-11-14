@@ -4,7 +4,7 @@
 
 **Result:** a gradient boosting model predicts remaining life with a typical error of **15.2 flights** on 100 unseen test engines. Guessing the average for every engine gives an error of 52.6.
 
-**Status:** Project 0 complete (Weeks 1 to 4, plus one follow-up investigation). Next: a neural network on the same data, then NASA satellite imagery.
+**Status:** Project 0 complete (Weeks 1 to 4, a follow-up investigation, and a first neural network, which did not beat gradient boosting). Next: improve the network, then NASA satellite imagery.
 
 ## Summary
 - Each engine runs until it fails while 21 sensors record every flight. The task is to look at an engine partway through its life and say how many flights remain (its Remaining Useful Life, RUL).
@@ -25,6 +25,7 @@ Scored on the last recorded flight of each of the 100 FD001 test engines. RMSE i
 | Linear regression, clipped + rolling average | 21.79 | 59 | Added smoothed sensors: no real gain |
 | Gradient boosting, clipped + rolling average | 18.43 | 59 | Added smoothed sensors: no real gain |
 | **Gradient boosting, clipped + change from each engine's own start** | **15.18** | **53** | Added clues for how far each sensor has moved from that engine's first 20 flights |
+| 1D-CNN neural network, same clues, last 30 flights | 17.03 (16.63 to 17.80) | 40 to 52 | Reads a clip of 30 flights instead of one; average of 5 random starts |
 
 "Too high" counts engines where the model promised more life than the engine really had. That is the unsafe direction.
 
@@ -104,7 +105,32 @@ Honest notes:
 - The five engines are still guessed 8 to 12 flights too high. Better, not solved.
 - Smoothing did nothing in Week 3 but helps here. Smoothing a raw reading was not useful; smoothing the *change from the engine's own start* is.
 
+## A first neural network (1D-CNN)
+Every model above looks at **one flight at a time**. A 1D-CNN looks at a **clip of the last 30 flights** and slides small stencils along it to spot shapes like a rise or a bend. Each engine's history is cut into overlapping clips (flights 1-30, 2-31, ...), and each clip is labeled with the RUL at its last flight, so it never contains the future.
+
+I compared two input sets and up to 40 training passes (epochs) on the same five practice exams. Gradient boosting was graded on exactly the same flights, because the network cannot answer before an engine has 30 flights.
+
+| Model | 5 practice exams (same flights) | Test RMSE |
+|---|---|---|
+| Gradient boosting + change clues | 13.34 | 15.18 |
+| 1D-CNN, 17 original columns | 15.97 | (not tested) |
+| 1D-CNN, + change clues | 15.20 | 17.03 (average of 5 random starts) |
+
+![Learning curves of the CNN](figures/cnn_learning_curves.png)
+
+![Predicted vs true RUL, gradient boosting and CNN](figures/cnn_predicted_vs_true.png)
+
+What it showed:
+- **It did not beat gradient boosting**, on the practice exams or on the test set.
+- **It overfits fast.** Error on the engines it studied keeps falling toward 2 to 4, but error on held-out engines is lowest after only 5 or 6 passes. With 100 training engines it starts memorizing almost at once.
+- **It still needs the hand-made clues.** A 30-flight clip cannot see the engine's first 20 flights, so it cannot work out the starting level by itself.
+- **It is safer in one way.** It guesses too high on fewer engines (40 to 52 of 100, vs 53), and no engine close to failure is guessed more than 20 flights too high.
+- **Random starts matter.** The same network trained from five different random starting points scored from 16.63 to 17.80, so I report the average.
+
+Reproduce with `src/07_cnn.py` (about 15 minutes).
+
 ## What failed
+- **The first neural network.** I hoped it would reach the published 12 to 16 range. It scored 17.03, worse than gradient boosting (15.18). Likely reasons (not proven): only 100 training engines, and the network memorizes them within a few passes.
 - **Rolling-average features.** I expected smoothing the sensors to give a clear gain. It gave none. Cross-validation RMSE moved from 18.57 to between 18.22 and 18.49 depending on the window, while the five checks themselves range from about 16 to 20, so the differences are noise. Test RMSE went from 18.36 to 18.43. I checked the averages by hand and they are computed correctly. Likely reason (not proven): noise is not the main limit; engines differ from each other in ways smoothing cannot fix.
 - **First leakage demonstration.** I tried to show that splitting by row gives a fake good score. With my real features it did not (by-row 52.60 vs by-engine 47.00). The fake boost only appears once the model can identify the engine (24.69 vs 47.30). I still split by engine, because it stays safe as features change.
 - **Feature count.** My notes said 19 usable features. The data says 17. Seven columns never change (`op3, s1, s5, s10, s16, s18, s19`).
@@ -120,7 +146,7 @@ Honest notes:
 
 ## Next steps
 1. Tune the model's settings, and test whether the starting-level idea holds on the harder subsets (FD002 to FD004).
-2. A neural network (1D-CNN or LSTM in PyTorch) that reads an engine's recent history as a sequence, aiming at the published 12 to 16 range.
+2. Improve the neural network so it stops memorizing: dropout, a smaller network, averaging several networks, longer clips. Then try an LSTM for comparison.
 3. Project 1: move from engine data to NASA HLS satellite imagery.
 
 ## Project layout
@@ -129,7 +155,8 @@ Honest notes:
 | `src/cmapss.py` | Shared helpers: loading data, RUL labels, RMSE, splits, plots |
 | `src/02_week1.py` to `src/05_week4.py` | Each week as a script (prints results, saves the plots) |
 | `src/06_engine_baselines.py` | Follow-up: why some engines were overestimated, and the fix |
-| `notebooks/01_week1.ipynb` to `05_engine_baselines.ipynb` | The same steps as notebooks, with explanations |
+| `src/07_cnn.py` | First neural network: a 1D-CNN in PyTorch |
+| `notebooks/01_week1.ipynb` to `06_cnn.ipynb` | The same steps as notebooks, with explanations |
 | `figures/` | Saved plots |
 | `LOG.md` | Experiment log: every model, its score, and what I learned |
 
@@ -142,6 +169,7 @@ python3 -m venv .venv                         # private package folder for this 
 .venv/bin/python src/03_week2.py              # Week 2: linear regression, validation
 .venv/bin/python src/04_week3.py              # Week 3: clipping, gradient boosting (a few minutes)
 .venv/bin/python src/06_engine_baselines.py   # follow-up: the best model (a few minutes)
+.venv/bin/python src/07_cnn.py                # neural network (about 15 minutes)
 .venv/bin/jupyter lab notebooks/              # or open the notebooks in your browser
 ```
 

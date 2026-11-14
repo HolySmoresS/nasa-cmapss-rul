@@ -356,3 +356,139 @@ def starting_score(df, n_start=20, reference=None):
     start = df[df["cycle"] <= n_start].groupby("unit")[top].mean()
     z = (start - ref_start.mean()) / ref_start.std()   # distance from average, in spreads
     return (z * healthy_direction).mean(axis=1)
+
+
+# ---------------------------------------------------------------------------
+# Neural network helpers (the "Later" milestone: a 1D-CNN in PyTorch).
+# PyTorch is imported inside each function, so the older scripts still run
+# without it.
+# ---------------------------------------------------------------------------
+
+WINDOW = 30  # flights per "video clip". The shortest test engine has 31 flights, so every one fits.
+
+
+def load_test_with_rul(add_features=None):
+    """The FULL test history (every flight), with an RUL label on every row.
+
+    The network needs each test engine's last 30 flights, not just its last row.
+    RUL_FD001.txt gives the answer at the last flight; one flight earlier the
+    engine had one more flight left, and so on back to the start.
+    """
+    test = load_raw("test_FD001.txt")
+    if add_features is not None:
+        test = add_features(test)
+    true_rul = pd.read_csv(DATA_DIR / "RUL_FD001.txt", header=None, names=["RUL"])["RUL"]
+    last_cycle = test.groupby("unit")["cycle"].transform("max")
+    rul_at_end = test["unit"].map(dict(zip(range(1, len(true_rul) + 1), true_rul)))
+    test["RUL"] = rul_at_end + (last_cycle - test["cycle"])
+    return test
+
+
+def fit_scaler(df, cols):
+    """Average and spread of each column, measured on TRAINING rows only.
+
+    Neural networks learn badly when one input is around 1,400 and another
+    around 0.03. We shift and stretch every column to a similar range. The
+    numbers come from training data only: measuring them on test engines too
+    would be a small peek at the exam (data leakage).
+    """
+    mean = df[cols].mean()
+    std = df[cols].std().replace(0, 1.0)  # guard against dividing by zero
+    return mean, std
+
+
+def apply_scaler(df, cols, scaler):
+    df = df.copy()
+    mean, std = scaler
+    df[cols] = (df[cols] - mean) / std
+    return df
+
+
+def make_windows(df, cols, window=WINDOW, last_only=False):
+    """Cut each engine's history into overlapping clips of `window` flights.
+
+    Clip 1 = flights 1-30, clip 2 = flights 2-31, ... Each clip's label is the
+    RUL at its LAST flight, so a clip only ever contains flights that have
+    already happened. `last_only=True` keeps just the final clip per engine
+    (used for grading test engines, like before).
+    Returns X with shape (clips, window, features), y, and the engine of each clip.
+    """
+    X, y, units = [], [], []
+    for unit, e in df.groupby("unit", sort=True):
+        values = e[cols].to_numpy(dtype=np.float32)
+        rul = e["RUL"].to_numpy(dtype=np.float32)
+        ends = [len(e)] if last_only else range(window, len(e) + 1)
+        for end in ends:
+            if end < window:
+                continue  # too short for a full clip (never happens in FD001)
+            X.append(values[end - window:end])
+            y.append(rul[end - 1])
+            units.append(unit)
+    return np.stack(X), np.array(y, dtype=np.float32), np.array(units)
+
+
+def make_cnn(n_features, window=WINDOW):
+    """A small 1D-CNN: two sliding-stencil layers, then a small decision layer.
+
+    Conv1d = the stencil. kernel_size=5 means it looks at 5 neighboring flights
+    at a time. The first layer has 16 stencils, the second 32; each learns to
+    spot one kind of shape (a rise, a bend, a jump). Flatten + Linear then
+    combine everything the stencils found into one number: the RUL guess.
+    ReLU = "keep positive signals, zero out negative ones"; without it, stacking
+    layers would collapse back into one straight-line model.
+    """
+    from torch import nn
+
+    return nn.Sequential(
+        nn.Conv1d(n_features, 16, kernel_size=5, padding=2), nn.ReLU(),
+        nn.Conv1d(16, 32, kernel_size=5, padding=2), nn.ReLU(),
+        nn.Flatten(),
+        nn.Linear(32 * window, 32), nn.ReLU(),
+        nn.Linear(32, 1),
+    )
+
+
+def predict_cnn(model, X, scale=RUL_CAP):
+    """RUL guesses (in flights) for clips X of shape (clips, window, features)."""
+    import torch
+
+    model.eval()  # "exam mode": no learning happens here
+    with torch.no_grad():
+        Xt = torch.from_numpy(np.ascontiguousarray(X.transpose(0, 2, 1)))
+        return model(Xt).squeeze(1).numpy() * scale
+
+
+def train_cnn(X, y, n_epochs=30, seed=0, X_val=None, y_val=None,
+              lr=1e-3, batch_size=256, scale=RUL_CAP):
+    """Train a fresh CNN on clips X with labels y. Returns (model, history).
+
+    One epoch = the network sees every training clip once, in shuffled batches
+    of 256. After each batch it nudges its numbers a little to shrink the error
+    (that nudging is what "learning" means here). `history` records train and
+    validation RMSE after every epoch, so we can watch for overfitting.
+    Labels are divided by 125 while learning (networks prefer numbers near 0-1)
+    and multiplied back for every prediction.
+    """
+    import torch
+
+    torch.manual_seed(seed)  # same starting numbers every run = repeatable
+    model = make_cnn(X.shape[2], X.shape[1])
+    opt = torch.optim.Adam(model.parameters(), lr=lr)
+    Xt = torch.from_numpy(np.ascontiguousarray(X.transpose(0, 2, 1)))  # PyTorch wants (clips, features, flights)
+    yt = torch.from_numpy(y / scale)
+    gen = torch.Generator().manual_seed(seed)
+    history = []
+    for epoch in range(n_epochs):
+        model.train()
+        order = torch.randperm(len(Xt), generator=gen)
+        for i in range(0, len(Xt), batch_size):
+            idx = order[i:i + batch_size]
+            opt.zero_grad()
+            loss = ((model(Xt[idx]).squeeze(1) - yt[idx]) ** 2).mean()  # squared error, like RMSE
+            loss.backward()   # work out which way to nudge each number
+            opt.step()        # nudge them
+        record = {"epoch": epoch + 1, "train": rmse(y, predict_cnn(model, X, scale))}
+        if X_val is not None:
+            record["val"] = rmse(y_val, predict_cnn(model, X_val, scale))
+        history.append(record)
+    return model, history

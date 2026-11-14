@@ -3,3 +3,4 @@ pandas==2.3.3
 scikit-learn==1.6.1
 matplotlib==3.9.4
 jupyterlab==4.5.11
+torch==2.8.0

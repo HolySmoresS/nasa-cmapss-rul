@@ -48,7 +48,8 @@ That leaves 17 usable features (op1, op2 + 15 sensors), measured Nov 13, 2026.
 - Results on the FD001 test set (all run and logged): mean baseline 52.62, linear regression 32.04, linear clipped 21.90, gradient boosting clipped 18.36, gradient boosting clipped + "change from each engine's own start" features 15.18 (current best).
 - Key finding: engines start at different sensor levels, so comparing each engine to its own first 20 flights matters more than smoothing.
 - Layout: shared helpers in src/cmapss.py; each step is a numbered script in src/ AND an executed notebook in notebooks/; plots in figures/. Run code with .venv/bin/python.
-- NEXT: the "Later" milestone, a 1D-CNN or LSTM in PyTorch on FD001 (PyTorch is not installed yet). Ask me before choosing the design.
+- Neural network step DONE (Nov 14, 2026): 1D-CNN in PyTorch 2.8.0 (src/07_cnn.py, notebooks/06_cnn.ipynb), 30-flight clips, change-from-own-start inputs, 6 epochs. Test RMSE 17.03 (average of 5 random starts, range 16.63-17.80); did NOT beat gradient boosting (15.18). It overfits within 5-6 epochs.
+- NEXT: reduce CNN overfitting (dropout, smaller net, averaging networks, longer clips), then maybe an LSTM. Ask me before choosing.
 
 ## Rules for this repo
 - Log every experiment in LOG.md (date, model, RMSE, what changed, what I learned).
