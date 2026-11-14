@@ -127,3 +127,59 @@ def plot_wear(train, n_sensors=6):
     fig.suptitle("Six most wear-sensitive sensors, three FD001 training engines", fontsize=13)
     fig.tight_layout(rect=(0, 0, 1, 0.92))  # leave room at the top for the legend
     return fig
+
+
+def feature_columns(df):
+    """The columns a model is allowed to use as clues (features).
+
+    We leave out: unit and cycle (ID numbers, not measurements), RUL (the answer!),
+    and the constant columns (they never change, so they carry no information).
+    """
+    skip = ["unit", "cycle", "RUL"] + constant_columns(df)
+    return [c for c in COLUMNS if c not in skip]
+
+
+def split_by_engine(df, val_fraction=0.2, seed=42):
+    """Split rows into (train_part, validation_part), keeping each ENGINE whole.
+
+    Why by engine and not by row: flights 100 and 101 of one engine are near-twins.
+    If they landed on opposite sides of the split, the model would be "tested" on
+    rows it has practically already seen (data leakage) and the score would be fake.
+    """
+    rng = np.random.default_rng(seed)  # seed = same shuffle every run (repeatable)
+    engines = df["unit"].unique()
+    rng.shuffle(engines)
+    n_val = int(round(len(engines) * val_fraction))
+    val_engines = set(engines[:n_val])
+    is_val = df["unit"].isin(val_engines)
+    return df[~is_val].copy(), df[is_val].copy()
+
+
+def plot_predicted_vs_true(panels, suptitle):
+    """Scatter charts of predicted vs true RUL, one panel per (title, truth, pred).
+
+    Each dot is one prediction. Dots ON the dashed diagonal = perfect guesses;
+    above it = guessed too high; below it = guessed too low.
+    """
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(1, len(panels), figsize=(6 * len(panels), 5.5),
+                             sharex=True, sharey=True, squeeze=False)
+    axes = axes[0]
+    for ax, (title, truth, pred) in zip(axes, panels):
+        many = len(truth) > 500  # lots of dots -> make them small and see-through
+        ax.scatter(truth, pred, s=8 if many else 28, alpha=0.15 if many else 0.9,
+                   color=ENGINE_COLORS[0], linewidths=0)
+        ax.plot([0, 360], [0, 360], color="#52514e", linewidth=1.2, linestyle="--")
+        ax.set_title(f"{title}\nRMSE {rmse(truth, pred):.1f}", fontsize=11)
+        ax.set_xlabel("true RUL (cycles)")
+        ax.grid(alpha=0.25)
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+    axes[0].set_ylabel("predicted RUL (cycles)")
+    axes[0].annotate("dashed line = perfect prediction", xy=(250, 250), xytext=(150, 330),
+                     fontsize=9, color="#52514e",
+                     arrowprops={"arrowstyle": "-", "color": "#52514e", "linewidth": 0.8})
+    fig.suptitle(suptitle, fontsize=13)
+    fig.tight_layout()
+    return fig
