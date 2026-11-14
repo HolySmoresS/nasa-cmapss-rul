@@ -43,7 +43,7 @@ def load_train():
     return add_rul(load_raw("train_FD001.txt"))
 
 
-def load_test_last_rows():
+def load_test_last_rows(add_features=None):
     """The LAST row of each test engine, plus its true RUL from RUL_FD001.txt.
 
     Test engines are cut off at some point before failure. The official
@@ -51,6 +51,10 @@ def load_test_last_rows():
     So we grade ONLY on each engine's final row (100 rows, one per engine).
     """
     test = load_raw("test_FD001.txt")
+    if add_features is not None:
+        # Features like rolling averages need each engine's EARLIER flights, so we
+        # build them on the full test history first and only then keep the last row.
+        test = add_features(test)
     # The rows are in order, so the last row per engine is its final snapshot.
     last_rows = test.groupby("unit").tail(1).reset_index(drop=True)
     # RUL_FD001.txt has one number per line: line 1 = engine 1, line 2 = engine 2...
@@ -155,7 +159,7 @@ def split_by_engine(df, val_fraction=0.2, seed=42):
     return df[~is_val].copy(), df[is_val].copy()
 
 
-def plot_predicted_vs_true(panels, suptitle):
+def plot_predicted_vs_true(panels, suptitle, limit=360):
     """Scatter charts of predicted vs true RUL, one panel per (title, truth, pred).
 
     Each dot is one prediction. Dots ON the dashed diagonal = perfect guesses;
@@ -170,16 +174,92 @@ def plot_predicted_vs_true(panels, suptitle):
         many = len(truth) > 500  # lots of dots -> make them small and see-through
         ax.scatter(truth, pred, s=8 if many else 28, alpha=0.15 if many else 0.9,
                    color=ENGINE_COLORS[0], linewidths=0)
-        ax.plot([0, 360], [0, 360], color="#52514e", linewidth=1.2, linestyle="--")
+        ax.plot([0, limit], [0, limit], color="#52514e", linewidth=1.2, linestyle="--")
         ax.set_title(f"{title}\nRMSE {rmse(truth, pred):.1f}", fontsize=11)
         ax.set_xlabel("true RUL (cycles)")
         ax.grid(alpha=0.25)
         for side in ("top", "right"):
             ax.spines[side].set_visible(False)
     axes[0].set_ylabel("predicted RUL (cycles)")
-    axes[0].annotate("dashed line = perfect prediction", xy=(250, 250), xytext=(150, 330),
-                     fontsize=9, color="#52514e",
-                     arrowprops={"arrowstyle": "-", "color": "#52514e", "linewidth": 0.8})
+    # Plain caption in the empty top-left corner (no arrow, so it never crosses dots).
+    axes[0].text(0.03, 0.96, "dashed line = perfect prediction", transform=axes[0].transAxes,
+                 fontsize=9, color="#52514e", va="top")
     fig.suptitle(suptitle, fontsize=13)
+    fig.tight_layout()
+    return fig
+
+
+RUL_CAP = 125  # "more than this many flights left" is treated as simply "healthy"
+
+
+def clip_rul(df, cap=RUL_CAP):
+    """Return a copy where every RUL label above `cap` is replaced by `cap`.
+
+    Why: a healthy engine's sensors look the same at 300 flights left as at 150,
+    so asking the model to tell those apart is asking the impossible. Clipping
+    lets it say "healthy" and only count down once wear actually shows.
+    """
+    df = df.copy()
+    df["RUL"] = df["RUL"].clip(upper=cap)
+    return df
+
+
+def add_rolling_features(df, window):
+    """Add one smoothed column per sensor: the average of its last `window` flights.
+
+    Why: single readings are jumpy (noise). Averaging recent flights cancels the
+    random wiggles and keeps the real trend.
+    No peeking: flight 50's average uses flights 50, 49, 48... never flight 51,
+    and it is computed per engine, so engines never mix. Early flights that don't
+    have `window` flights behind them yet just average what exists so far.
+    """
+    df = df.copy()
+    sensors = [c for c in feature_columns(df) if c.startswith("s")]
+    by_engine = df.groupby("unit")
+    for c in sensors:
+        df[f"{c}_avg{window}"] = by_engine[c].transform(
+            lambda x: x.rolling(window, min_periods=1).mean())
+    return df
+
+
+def cross_validate_by_engine(make_model, df, cols, n_folds=5):
+    """Average validation RMSE over `n_folds` different held-out engine groups.
+
+    One 20-engine practice exam is noisy (Week 2). Here every engine takes a
+    turn being held out, and we average the scores for a steadier number.
+    Returns (mean RMSE, list of the per-fold RMSEs).
+    """
+    from sklearn.model_selection import GroupKFold
+
+    scores = []
+    for tr_idx, val_idx in GroupKFold(n_splits=n_folds).split(df, groups=df["unit"]):
+        tr, val = df.iloc[tr_idx], df.iloc[val_idx]
+        model = make_model().fit(tr[cols], tr["RUL"])
+        scores.append(rmse(val["RUL"], model.predict(val[cols])))
+    return float(np.mean(scores)), scores
+
+
+def plot_scoreboard(scores, title):
+    """Horizontal bar chart of test RMSE per model. `scores` = {model name: RMSE}.
+
+    Shorter bar = smaller typical error = better. One color, because every bar
+    measures the same thing.
+    """
+    import matplotlib.pyplot as plt
+
+    names, values = list(scores.keys()), list(scores.values())
+    fig, ax = plt.subplots(figsize=(9, 0.55 * len(names) + 1.3))
+    bars = ax.barh(names, values, color=ENGINE_COLORS[0], height=0.6)
+    ax.invert_yaxis()  # first model at the top
+    for bar, v in zip(bars, values):
+        ax.text(v + 0.6, bar.get_y() + bar.get_height() / 2, f"{v:.2f}",
+                va="center", fontsize=10)
+    ax.set_xlabel("test RMSE: typical error in flights (shorter bar = better)")
+    ax.set_xlim(0, max(values) * 1.12)
+    ax.set_title(title, fontsize=12)
+    ax.grid(axis="x", alpha=0.25)
+    for side in ("top", "right", "left"):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(axis="y", length=0)
     fig.tight_layout()
     return fig
