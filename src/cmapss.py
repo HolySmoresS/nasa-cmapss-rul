@@ -263,3 +263,51 @@ def plot_scoreboard(scores, title):
     ax.tick_params(axis="y", length=0)
     fig.tight_layout()
     return fig
+
+
+def stage_of_life(true_rul, cap=RUL_CAP):
+    """Sort engines into three groups by how many flights they TRULY have left.
+
+    Close to failure (30 or fewer), wearing (31 up to the cap), and healthy
+    (more than the cap). Used only for grading, never as a clue for the model.
+    """
+    labels = ["close to failure (0-30)", f"wearing (31-{cap})", f"healthy (over {cap})"]
+    return pd.cut(pd.Series(np.asarray(true_rul, dtype=float)),
+                  bins=[-1, 30, cap, np.inf], labels=labels)
+
+
+def plot_error_by_stage(true_rul, preds):
+    """Grouped bars: RMSE of each model within each stage-of-life group.
+
+    `preds` = {model name: predictions}. Shorter bar = better. Shows WHERE a
+    model is good or bad, which a single overall RMSE hides.
+    """
+    import matplotlib.pyplot as plt
+
+    truth = np.asarray(true_rul, dtype=float)
+    stage = stage_of_life(truth)
+    groups = list(stage.cat.categories)
+    width = 0.8 / len(preds)
+    fig, ax = plt.subplots(figsize=(9, 4.8))
+    for i, (name, pred) in enumerate(preds.items()):
+        pred = np.asarray(pred, dtype=float)
+        vals = [rmse(truth[(stage == g).to_numpy()], pred[(stage == g).to_numpy()])
+                for g in groups]
+        x = np.arange(len(groups)) + i * width
+        bars = ax.bar(x, vals, width=width * 0.92, color=ENGINE_COLORS[i], label=name)
+        for bar, v in zip(bars, vals):
+            ax.text(bar.get_x() + bar.get_width() / 2, v + 0.4, f"{v:.1f}",
+                    ha="center", fontsize=10)
+    counts = [int((stage == g).sum()) for g in groups]
+    ax.set_xticks(np.arange(len(groups)) + width * (len(preds) - 1) / 2)
+    ax.set_xticklabels([f"{g}\n{n} engines" for g, n in zip(groups, counts)])
+    ax.set_ylabel("RMSE: typical error in flights")
+    ax.set_xlabel("how many flights the engine truly has left")
+    ax.set_title("Where each model is wrong (100 test engines; shorter bar = better)", fontsize=12)
+    ax.grid(axis="y", alpha=0.25)
+    ax.legend(frameon=False, fontsize=9, loc="upper left")
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(axis="x", length=0)
+    fig.tight_layout()
+    return fig
