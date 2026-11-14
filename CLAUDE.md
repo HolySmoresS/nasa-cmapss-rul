@@ -33,7 +33,8 @@ Metric: RMSE (lower is better).
 - Linear regression, RUL clipped at 125: ~21.9
 - Gradient boosting, RUL clipped at 125: ~18.4
 - Published deep-learning results on FD001 are typically ~12-16 (goal for later weeks).
-Constant-sensor columns (zero variance) should be dropped (19 usable features).
+Constant columns (zero variance) should be dropped: op3, s1, s5, s10, s16, s18, s19.
+That leaves 17 usable features (op1, op2 + 15 sensors), measured Nov 13, 2026.
 
 ## Milestones
 1. Week 1: load data, create RUL labels, plot a few engines, mean baseline.
