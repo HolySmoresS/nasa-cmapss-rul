@@ -427,7 +427,7 @@ def make_windows(df, cols, window=WINDOW, last_only=False):
     return np.stack(X), np.array(y, dtype=np.float32), np.array(units)
 
 
-def make_cnn(n_features, window=WINDOW):
+def make_cnn(n_features, window=WINDOW, dropout=0.0, pool=False):
     """A small 1D-CNN: two sliding-stencil layers, then a small decision layer.
 
     Conv1d = the stencil. kernel_size=5 means it looks at 5 neighboring flights
@@ -436,16 +436,24 @@ def make_cnn(n_features, window=WINDOW):
     combine everything the stencils found into one number: the RUL guess.
     ReLU = "keep positive signals, zero out negative ones"; without it, stacking
     layers would collapse back into one straight-line model.
+
+    Two ways to stop it memorizing the training engines (overfitting):
+    - dropout: while learning, switch off this fraction of signals at random,
+      so the network cannot lean on any single one. Switched off for predictions.
+    - pool=True: a smaller network. Instead of remembering WHERE in the clip
+      each shape appeared (Flatten), just average HOW MUCH of each shape it saw.
+      With our 47 input columns that cuts 37,153 learned numbers to 6,401.
     """
     from torch import nn
 
-    return nn.Sequential(
-        nn.Conv1d(n_features, 16, kernel_size=5, padding=2), nn.ReLU(),
-        nn.Conv1d(16, 32, kernel_size=5, padding=2), nn.ReLU(),
-        nn.Flatten(),
-        nn.Linear(32 * window, 32), nn.ReLU(),
-        nn.Linear(32, 1),
-    )
+    layers = [nn.Conv1d(n_features, 16, kernel_size=5, padding=2), nn.ReLU(), nn.Dropout(dropout),
+              nn.Conv1d(16, 32, kernel_size=5, padding=2), nn.ReLU(), nn.Dropout(dropout)]
+    if pool:
+        layers += [nn.AdaptiveAvgPool1d(1), nn.Flatten(), nn.Linear(32, 1)]
+    else:
+        layers += [nn.Flatten(), nn.Linear(32 * window, 32), nn.ReLU(), nn.Dropout(dropout),
+                   nn.Linear(32, 1)]
+    return nn.Sequential(*layers)
 
 
 def predict_cnn(model, X, scale=RUL_CAP):
@@ -459,7 +467,7 @@ def predict_cnn(model, X, scale=RUL_CAP):
 
 
 def train_cnn(X, y, n_epochs=30, seed=0, X_val=None, y_val=None,
-              lr=1e-3, batch_size=256, scale=RUL_CAP):
+              lr=1e-3, batch_size=256, scale=RUL_CAP, **net):
     """Train a fresh CNN on clips X with labels y. Returns (model, history).
 
     One epoch = the network sees every training clip once, in shuffled batches
@@ -468,11 +476,12 @@ def train_cnn(X, y, n_epochs=30, seed=0, X_val=None, y_val=None,
     validation RMSE after every epoch, so we can watch for overfitting.
     Labels are divided by 125 while learning (networks prefer numbers near 0-1)
     and multiplied back for every prediction.
+    `net` = options passed to make_cnn (dropout=..., pool=...).
     """
     import torch
 
     torch.manual_seed(seed)  # same starting numbers every run = repeatable
-    model = make_cnn(X.shape[2], X.shape[1])
+    model = make_cnn(X.shape[2], X.shape[1], **net)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
     Xt = torch.from_numpy(np.ascontiguousarray(X.transpose(0, 2, 1)))  # PyTorch wants (clips, features, flights)
     yt = torch.from_numpy(y / scale)

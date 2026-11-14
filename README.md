@@ -26,6 +26,7 @@ Scored on the last recorded flight of each of the 100 FD001 test engines. RMSE i
 | Gradient boosting, clipped + rolling average | 18.43 | 59 | Added smoothed sensors: no real gain |
 | **Gradient boosting, clipped + change from each engine's own start** | **15.18** | **53** | Added clues for how far each sensor has moved from that engine's first 20 flights |
 | 1D-CNN neural network, same clues, last 30 flights | 17.03 (16.63 to 17.80) | 40 to 52 | Reads a clip of 30 flights instead of one; average of 5 random starts |
+| 1D-CNN, smaller network, average of 5 networks | 16.84 | 43 | Smaller network to curb memorizing; the 5 networks' guesses averaged |
 
 "Too high" counts engines where the model promised more life than the engine really had. That is the unsafe direction.
 
@@ -129,6 +130,30 @@ What it showed:
 
 Reproduce with `src/07_cnn.py` (about 15 minutes).
 
+### Trying to stop it memorizing
+I tried three standard fixes, one at a time, on the same five practice exams with the same inputs and the same random start:
+- **Dropout:** while learning, 30% of the network's signals are switched off at random, so it cannot lean on any single one.
+- **Smaller network:** instead of remembering *where* in the clip each shape appeared, it only counts *how much* of each shape it saw (6,401 learned numbers instead of 37,153).
+- **Both together.**
+
+![Learning curves for the three fixes](figures/cnn_overfitting_fixes.png)
+
+| Version | 5 practice exams | Test RMSE |
+|---|---|---|
+| First CNN (no fix) | 15.20 | 17.03 (average of 5) |
+| + dropout | 16.75 | (not tested) |
+| Smaller network (chosen) | 14.64 | 17.45 (average of 5) |
+| Smaller + dropout | 14.96 | (not tested) |
+| Smaller network, the 5 networks' guesses averaged | | **16.84** |
+| Gradient boosting + change clues | 13.34 | **15.18** |
+
+What it showed:
+- **Memorizing is not the main limit.** The fixes shrank the gap between studied and new engines a little, but the error on new engines stays around 14.5 to 15 whatever I do. Only "dropout alone is worse" is bigger than the noise between practice exams.
+- **Averaging 5 networks helps.** 16.84 beats each of the 5 single networks (16.96 to 17.78). I decided to try this before looking at the test set.
+- **Gradient boosting still wins.** Likely reason (not proven): with only 100 training engines, and the hand-made clues already in place, a tree model suits this data better.
+
+Reproduce with `src/08_cnn_overfitting.py` (about 30 minutes).
+
 ## What failed
 - **The first neural network.** I hoped it would reach the published 12 to 16 range. It scored 17.03, worse than gradient boosting (15.18). Likely reasons (not proven): only 100 training engines, and the network memorizes them within a few passes.
 - **Rolling-average features.** I expected smoothing the sensors to give a clear gain. It gave none. Cross-validation RMSE moved from 18.57 to between 18.22 and 18.49 depending on the window, while the five checks themselves range from about 16 to 20, so the differences are noise. Test RMSE went from 18.36 to 18.43. I checked the averages by hand and they are computed correctly. Likely reason (not proven): noise is not the main limit; engines differ from each other in ways smoothing cannot fix.
@@ -146,7 +171,7 @@ Reproduce with `src/07_cnn.py` (about 15 minutes).
 
 ## Next steps
 1. Tune the model's settings, and test whether the starting-level idea holds on the harder subsets (FD002 to FD004).
-2. Improve the neural network so it stops memorizing: dropout, a smaller network, averaging several networks, longer clips. Then try an LSTM for comparison.
+2. Neural networks: try longer clips, longer dropout training, or an LSTM. The anti-memorizing fixes did not close the gap to gradient boosting.
 3. Project 1: move from engine data to NASA HLS satellite imagery.
 
 ## Project layout
@@ -156,7 +181,8 @@ Reproduce with `src/07_cnn.py` (about 15 minutes).
 | `src/02_week1.py` to `src/05_week4.py` | Each week as a script (prints results, saves the plots) |
 | `src/06_engine_baselines.py` | Follow-up: why some engines were overestimated, and the fix |
 | `src/07_cnn.py` | First neural network: a 1D-CNN in PyTorch |
-| `notebooks/01_week1.ipynb` to `06_cnn.ipynb` | The same steps as notebooks, with explanations |
+| `src/08_cnn_overfitting.py` | Three fixes for the CNN's memorizing, plus averaging 5 networks |
+| `notebooks/01_week1.ipynb` to `07_cnn_overfitting.ipynb` | The same steps as notebooks, with explanations |
 | `figures/` | Saved plots |
 | `LOG.md` | Experiment log: every model, its score, and what I learned |
 
@@ -170,6 +196,7 @@ python3 -m venv .venv                         # private package folder for this 
 .venv/bin/python src/04_week3.py              # Week 3: clipping, gradient boosting (a few minutes)
 .venv/bin/python src/06_engine_baselines.py   # follow-up: the best model (a few minutes)
 .venv/bin/python src/07_cnn.py                # neural network (about 15 minutes)
+.venv/bin/python src/08_cnn_overfitting.py    # fixes for its memorizing (about 30 minutes)
 .venv/bin/jupyter lab notebooks/              # or open the notebooks in your browser
 ```
 

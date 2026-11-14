@@ -49,7 +49,8 @@ That leaves 17 usable features (op1, op2 + 15 sensors), measured Nov 13, 2026.
 - Key finding: engines start at different sensor levels, so comparing each engine to its own first 20 flights matters more than smoothing.
 - Layout: shared helpers in src/cmapss.py; each step is a numbered script in src/ AND an executed notebook in notebooks/; plots in figures/. Run code with .venv/bin/python.
 - Neural network step DONE (Nov 14, 2026): 1D-CNN in PyTorch 2.8.0 (src/07_cnn.py, notebooks/06_cnn.ipynb), 30-flight clips, change-from-own-start inputs, 6 epochs. Test RMSE 17.03 (average of 5 random starts, range 16.63-17.80); did NOT beat gradient boosting (15.18). It overfits within 5-6 epochs.
-- NEXT: reduce CNN overfitting (dropout, smaller net, averaging networks, longer clips), then maybe an LSTM. Ask me before choosing.
+- Overfitting fixes DONE (Nov 14, 2026; src/08_cnn_overfitting.py, notebooks/07_cnn_overfitting.ipynb): dropout 0.3, smaller net (avg pooling), both. CV 15.20 / 16.75 / 14.64 / 14.96 (GB 13.34). Smaller net test 17.45; average of 5 networks 16.84 (best CNN). Gradient boosting 15.18 is still the best model. Memorizing is not the main limit.
+- NEXT: undecided. Options: longer clips, longer dropout training, LSTM, tune gradient boosting, harder subsets FD002-FD004, or move on to Project 1 (NASA HLS). Ask me before choosing.
 
 ## Rules for this repo
 - Log every experiment in LOG.md (date, model, RMSE, what changed, what I learned).
