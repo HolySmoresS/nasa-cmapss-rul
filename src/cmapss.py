@@ -311,3 +311,48 @@ def plot_error_by_stage(true_rul, preds):
     ax.tick_params(axis="x", length=0)
     fig.tight_layout()
     return fig
+
+
+def add_baseline_features(df, n_start=20, smooth=None):
+    """Add one column per sensor: how far it has moved from THIS engine's own start.
+
+    Why: every engine begins life at a slightly different level, like people with
+    different resting heart rates. A reading that looks normal on the shared scale
+    can be a big change for an engine that started unusually "healthy-looking".
+    The starting level is the average of the engine's first `n_start` flights.
+    No peeking: during those first flights we only average the flights so far.
+    If `smooth` is given, also add the average of that change over the last
+    `smooth` flights (past flights only), which steadies the jumpy readings.
+    """
+    df = df.copy()
+    sensors = [c for c in feature_columns(df) if c.startswith("s")]
+    by_engine = df.groupby("unit")
+    for c in sensors:
+        # Running average of the flights so far, frozen once n_start flights exist.
+        so_far = by_engine[c].transform(lambda x: x.expanding().mean())
+        frozen = by_engine[c].transform(lambda x: x.iloc[:n_start].mean())
+        start_level = so_far.where(df["cycle"] <= n_start, frozen)
+        df[f"{c}_chg"] = df[c] - start_level
+    if smooth:
+        by_engine = df.groupby("unit")
+        for c in sensors:
+            df[f"{c}_chg_avg{smooth}"] = by_engine[f"{c}_chg"].transform(
+                lambda x: x.rolling(smooth, min_periods=1).mean())
+    return df
+
+
+def starting_score(df, n_start=20, reference=None):
+    """One number per engine: how healthy its sensors look in its first flights.
+
+    0 = an average engine; positive = starts out looking healthier than average.
+    Built from the six most wear-sensitive sensors. `reference` is the table
+    whose engines define "average" (always the training data).
+    """
+    reference = df if reference is None else reference
+    corr = sensor_correlations(add_rul(reference) if "RUL" not in reference else reference)
+    top = list(corr.index[:6])
+    healthy_direction = np.sign(corr[top])   # +1 if a higher reading means healthier
+    ref_start = reference[reference["cycle"] <= n_start].groupby("unit")[top].mean()
+    start = df[df["cycle"] <= n_start].groupby("unit")[top].mean()
+    z = (start - ref_start.mean()) / ref_start.std()   # distance from average, in spreads
+    return (z * healthy_direction).mean(axis=1)

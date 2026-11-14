@@ -2,16 +2,16 @@
 
 **Goal:** predict how many flights a jet engine has left before it fails, using simulated NASA sensor data (C-MAPSS, subset FD001).
 
-**Result:** a gradient boosting model predicts remaining life with a typical error of **18.4 flights** on 100 unseen test engines. Guessing the average for every engine gives an error of 52.6.
+**Result:** a gradient boosting model predicts remaining life with a typical error of **15.2 flights** on 100 unseen test engines. Guessing the average for every engine gives an error of 52.6.
 
-**Status:** Project 0 complete (Weeks 1 to 4). Next: a neural network on the same data, then NASA satellite imagery.
+**Status:** Project 0 complete (Weeks 1 to 4, plus one follow-up investigation). Next: a neural network on the same data, then NASA satellite imagery.
 
 ## Summary
 - Each engine runs until it fails while 21 sensors record every flight. The task is to look at an engine partway through its life and say how many flights remain (its Remaining Useful Life, RUL).
 - I built four models, each one a single change from the one before, so every improvement can be traced to its cause.
 - The biggest single gain did not come from a better model. It came from changing the labels the model learns from (capping RUL at 125).
 - One idea I expected to help, smoothing the sensor readings, did not help at all. That is reported below, along with the mistakes I made.
-- The best model still makes a few large, unsafe mistakes on engines close to failure. That is the main open problem.
+- Checking where the model was wrong turned up a few large, unsafe mistakes on engines close to failure. Tracking down the cause led to the best result: comparing each engine to its own starting level.
 
 ## Results
 Scored on the last recorded flight of each of the 100 FD001 test engines. RMSE is the typical size of the error, in flights. Lower is better.
@@ -21,17 +21,20 @@ Scored on the last recorded flight of each of the 100 FD001 test engines. RMSE i
 | Mean baseline | 52.62 | 71 | Predicts the training average (107.8) for every engine; ignores the sensors |
 | Linear regression, raw RUL labels | 32.04 | 85 | Uses 17 sensor and setting columns |
 | Linear regression, RUL clipped at 125 | 21.90 | 58 | Same model; only the training labels changed |
-| **Gradient boosting, RUL clipped at 125** | **18.36** | **53** | 100 small decision trees instead of a straight line |
+| Gradient boosting, RUL clipped at 125 | 18.36 | 53 | 100 small decision trees instead of a straight line |
 | Linear regression, clipped + rolling average | 21.79 | 59 | Added smoothed sensors: no real gain |
 | Gradient boosting, clipped + rolling average | 18.43 | 59 | Added smoothed sensors: no real gain |
+| **Gradient boosting, clipped + change from each engine's own start** | **15.18** | **53** | Added clues for how far each sensor has moved from that engine's first 20 flights |
 
 "Too high" counts engines where the model promised more life than the engine really had. That is the unsafe direction.
 
 ![Bar chart of test RMSE for every model](figures/week3_scoreboard.png)
 
+(The chart was drawn before the last row of the table was added.)
+
 These match the reference numbers I set out to reproduce for these simple models. Published deep-learning results on FD001 are typically 12 to 16.
 
-Every number in the first four rows can be reproduced with `src/05_week4.py`.
+The first four rows can be reproduced with `src/05_week4.py`, and the last row with `src/06_engine_baselines.py`.
 
 ## How I kept the testing honest
 - **The test set is used once per model, only for the final score.** Every choice (which model, which settings) was made using training engines only.
@@ -61,7 +64,7 @@ A healthy engine's sensors look the same at 300 flights left as at 150. Clipping
 
 Left to right, the dots tighten around the dashed "perfect" line.
 
-## Where the best model is still wrong
+## Where the Week 3 model was wrong
 ![RMSE by stage of life for two models](figures/week4_error_by_stage.png)
 
 The 100 test engines are sorted by how many flights they truly have left. Gradient boosting beats linear regression in every group, but its error is about 18 flights everywhere, including for engines close to failure.
@@ -72,9 +75,34 @@ Looking inside the 25 engines with 30 or fewer flights left:
 - For 5 of them the model is too high by 23 to 54 flights. One engine had 18 flights left and the model said 72.
 - All five had flown fewer than 170 flights, so they wore out early. I have not yet explained why the model misses them.
 
-A few large misses in the unsafe direction matter more than the average suggests. This is the first thing I would work on next.
+A few large misses in the unsafe direction matter more than the average suggests, so I investigated them (next section).
 
 Clipping is not the cause. A model trained on labels capped at 125 cannot answer above 125, but a *perfect* clipped model would still score 3.74 on this test set, and leaving out the 11 healthy engines only moves the score from 18.36 to 18.00.
+
+## Finding the cause, and a fix
+**Cause:** every engine begins life at a slightly different sensor level, like people with different resting heart rates. The model judged all engines on one shared scale. An engine that starts out looking extra healthy can be badly worn and still show numbers that look normal.
+
+I measured this on training engines only, each one predicted by a model that had never seen it:
+
+![Average miss near failure, grouped by how healthy each engine looked at the start](figures/followup_starting_level.png)
+
+Engines that started out looking healthiest were guessed 13 flights too high near failure (blue bars). Four of the five badly missed test engines started out on that side.
+
+**Fix:** new clues that say how far each sensor has moved from that engine's own first 20 flights, plus a smoothed version of the same. These only use flights that have already happened (checked: rebuilding them with later flights deleted gives identical values).
+
+| Clues | 5 practice exams (average RMSE) | Test RMSE | Test RMSE near failure | Near failure, over 20 too high |
+|---|---|---|---|---|
+| Original 17 | 18.57 | 18.36 | 18.34 | 5 |
+| + change from own start | 13.68 | 14.78 | 7.13 | 0 |
+| + change, also smoothed | 12.41 | 15.18 | 7.47 | 0 |
+
+![Predicted vs true RUL before and after the fix](figures/followup_predicted_vs_true.png)
+
+Honest notes:
+- The practice exams preferred the smoothed version and the test set slightly preferred the plain one. With 100 engines that gap is noise, so I report the one the practice exams chose: 15.18.
+- The idea came from studying mistakes on the test set, so the test set is not a perfectly fresh exam for this change. The cause and the fix were both confirmed on training engines alone, and all five practice exams improved by 4 to 7 flights.
+- The five engines are still guessed 8 to 12 flights too high. Better, not solved.
+- Smoothing did nothing in Week 3 but helps here. Smoothing a raw reading was not useful; smoothing the *change from the engine's own start* is.
 
 ## What failed
 - **Rolling-average features.** I expected smoothing the sensors to give a clear gain. It gave none. Cross-validation RMSE moved from 18.57 to between 18.22 and 18.49 depending on the window, while the five checks themselves range from about 16 to 20, so the differences are noise. Test RMSE went from 18.36 to 18.43. I checked the averages by hand and they are computed correctly. Likely reason (not proven): noise is not the main limit; engines differ from each other in ways smoothing cannot fix.
@@ -91,7 +119,7 @@ Clipping is not the cause. A model trained on labels capped at 125 cannot answer
 - **Default settings.** The gradient boosting settings were not tuned.
 
 ## Next steps
-1. Find out why the model overestimates engines that wear out early.
+1. Tune the model's settings, and test whether the starting-level idea holds on the harder subsets (FD002 to FD004).
 2. A neural network (1D-CNN or LSTM in PyTorch) that reads an engine's recent history as a sequence, aiming at the published 12 to 16 range.
 3. Project 1: move from engine data to NASA HLS satellite imagery.
 
@@ -100,7 +128,8 @@ Clipping is not the cause. A model trained on labels capped at 125 cannot answer
 |---|---|
 | `src/cmapss.py` | Shared helpers: loading data, RUL labels, RMSE, splits, plots |
 | `src/02_week1.py` to `src/05_week4.py` | Each week as a script (prints results, saves the plots) |
-| `notebooks/01_week1.ipynb` to `04_week4.ipynb` | Each week as a notebook, with explanations |
+| `src/06_engine_baselines.py` | Follow-up: why some engines were overestimated, and the fix |
+| `notebooks/01_week1.ipynb` to `05_engine_baselines.ipynb` | The same steps as notebooks, with explanations |
 | `figures/` | Saved plots |
 | `LOG.md` | Experiment log: every model, its score, and what I learned |
 
@@ -112,6 +141,7 @@ python3 -m venv .venv                         # private package folder for this 
 .venv/bin/python src/02_week1.py              # Week 1: labels, sensor plots, baseline
 .venv/bin/python src/03_week2.py              # Week 2: linear regression, validation
 .venv/bin/python src/04_week3.py              # Week 3: clipping, gradient boosting (a few minutes)
+.venv/bin/python src/06_engine_baselines.py   # follow-up: the best model (a few minutes)
 .venv/bin/jupyter lab notebooks/              # or open the notebooks in your browser
 ```
 
